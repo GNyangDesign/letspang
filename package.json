@@ -1,0 +1,10 @@
+{
+  "name": "letspang-workspace",
+  "version": "1.0.0",
+  "description": "Let's Pang - Realtime Web Multiplayer Casual Shooter",
+  "scripts": {
+    "dev:server": "node server/server.js",
+    "dev:client": "npm --prefix client run dev",
+    "build:client": "npm --prefix client run build"
+  }
+}
