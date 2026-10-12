@@ -62,13 +62,13 @@ function getWebSocketUrl() {
   const envUrl = import.meta.env.VITE_WS_URL;
   if (envUrl) return envUrl;
 
-  const isHttps = window.location.protocol === 'https:';
-  const protocol = isHttps ? 'wss:' : 'ws:';
+  // Local development fallback
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-    return `${protocol}//localhost:3001`;
+    return 'ws://localhost:3001';
   }
-  // Production: Vultr socket server (or same host fallback)
-  return `${protocol}//${window.location.host}`;
+
+  // Production live Vultr game server
+  return 'wss://socket.letspang.com';
 }
 
 const WS_URL = getWebSocketUrl();
