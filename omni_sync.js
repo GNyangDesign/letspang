@@ -10,15 +10,15 @@ const { URL } = require('url');
 
 const FIREBASE_URL = 'https://omni-bridge-8297b-default-rtdb.firebaseio.com/projects/letspang/logs.json';
 const SHARED_CONTEXT_FILE = path.join(__dirname, 'SHARED_CONTEXT.md');
+const WATCHDOG_TIMEOUT_MS = 60000; // 60s silence -> auto reconnect
 
-// Set of processed keys/ids to prevent duplicates
+// Set of processed keys to prevent duplicates
 const processedKeys = new Set();
 
 // Ensure SHARED_CONTEXT.md exists
 if (!fs.existsSync(SHARED_CONTEXT_FILE)) {
   fs.writeFileSync(SHARED_CONTEXT_FILE, '', 'utf8');
 } else {
-  // Pre-seed seen entries from existing file if any
   try {
     const existingContent = fs.readFileSync(SHARED_CONTEXT_FILE, 'utf8');
     const matches = existingContent.matchAll(/\[(.*?)\] \((.*?)\):/g);
@@ -61,7 +61,7 @@ function appendMessage(key, item) {
     content = JSON.stringify(item);
   }
 
-  // Deduplication check by key and by timestamp_role
+  // Deduplication check
   const compositeKey = `${time}_${role}`;
   if (processedKeys.has(key) || processedKeys.has(compositeKey)) {
     return;
@@ -81,7 +81,7 @@ function appendMessage(key, item) {
       }
     }
     fs.appendFileSync(SHARED_CONTEXT_FILE, prefix + entry, 'utf8');
-    console.log(`[OmniBridge] [${new Date().toISOString()}] Synced message from (${role})`);
+    console.log(`[OmniBridge] [${new Date().toISOString()}] Synced new message: [${time}] (${role})`);
   } catch (err) {
     console.error('[OmniBridge] Failed to write to SHARED_CONTEXT.md:', err.message);
   }
@@ -91,21 +91,24 @@ function appendMessage(key, item) {
  * Process incoming SSE payload
  */
 function processEvent(eventType, payload) {
-  if (!payload || payload.data === undefined || payload.data === null) {
-    return;
-  }
+  if (!payload) return;
 
   const { path: eventPath, data } = payload;
 
+  if (data === null || data === undefined) {
+    if (eventPath === '/') {
+      console.log('[OmniBridge] Current state on server: null (no messages yet, listening for updates)');
+    }
+    return;
+  }
+
   if (eventPath === '/') {
     if (typeof data === 'object') {
-      // Check if it's a single message object with role & content
       if (data.role && (data.content !== undefined || data.text !== undefined)) {
         appendMessage('root', data);
       } else {
-        // Map of { [id]: messageObj }
-        // Keys in Firebase RTDB are chronologically push-sorted
         const keys = Object.keys(data).sort();
+        console.log(`[OmniBridge] Snapshot received with ${keys.length} items.`);
         for (const key of keys) {
           const item = data[key];
           if (item && typeof item === 'object') {
@@ -115,7 +118,6 @@ function processEvent(eventType, payload) {
       }
     }
   } else {
-    // Child path like "/-P2gp_..."
     const segments = eventPath.split('/').filter(Boolean);
     const rootKey = segments[0];
 
@@ -124,21 +126,66 @@ function processEvent(eventType, payload) {
         appendMessage(rootKey, data);
       }
     } else {
-      // Deep path, e.g. "/-P.../content"
-      // If full object is not present, ignore or handle if needed
-      console.log(`[OmniBridge] Partial update on ${eventPath}`);
+      console.log(`[OmniBridge] Partial update received on ${eventPath}`);
     }
   }
 }
 
 let activeRequest = null;
 let reconnectTimer = null;
+let watchdogTimer = null;
+
+function resetWatchdog() {
+  if (watchdogTimer) clearTimeout(watchdogTimer);
+  watchdogTimer = setTimeout(() => {
+    console.log('[OmniBridge] Watchdog timeout (60s silence). Reconnecting...');
+    if (activeRequest) {
+      try {
+        activeRequest.destroy();
+      } catch (_) {}
+      activeRequest = null;
+    }
+    scheduleReconnect(1000);
+  }, WATCHDOG_TIMEOUT_MS);
+}
+
+function clearWatchdog() {
+  if (watchdogTimer) {
+    clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+  }
+}
+
+let isEnded = false;
+
+function scheduleReconnect(delayMs = 3000) {
+  if (isEnded) return;
+  isEnded = true;
+
+  clearWatchdog();
+
+  if (activeRequest) {
+    try {
+      activeRequest.destroy();
+    } catch (_) {}
+    activeRequest = null;
+  }
+
+  if (!reconnectTimer) {
+    console.log(`[OmniBridge] Scheduling reconnect in ${delayMs / 1000}s...`);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect(FIREBASE_URL);
+    }, delayMs);
+  }
+}
 
 function connect(targetUrl) {
   if (reconnectTimer) {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  isEnded = false;
 
   console.log(`[OmniBridge] Connecting to SSE stream: ${targetUrl}`);
 
@@ -155,33 +202,13 @@ function connect(targetUrl) {
   };
 
   let buffer = '';
-  let isEnded = false;
-
-  const scheduleReconnect = (delayMs = 3000) => {
-    if (isEnded) return;
-    isEnded = true;
-
-    if (activeRequest) {
-      try {
-        activeRequest.destroy();
-      } catch (_) {}
-      activeRequest = null;
-    }
-
-    if (!reconnectTimer) {
-      console.log(`[OmniBridge] Scheduling reconnect in ${delayMs / 1000}s...`);
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        connect(FIREBASE_URL);
-      }, delayMs);
-    }
-  };
 
   const req = https.request(options, (res) => {
     // Handle HTTP Redirects (307, 301, 302)
     if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
       console.log(`[OmniBridge] Redirecting (${res.statusCode}) to ${res.headers.location}`);
       isEnded = true;
+      clearWatchdog();
       req.destroy();
       connect(res.headers.location);
       return;
@@ -194,8 +221,10 @@ function connect(targetUrl) {
     }
 
     console.log('[OmniBridge] SSE Stream connected successfully (HTTP 200 OK)');
+    resetWatchdog();
 
     res.on('data', (chunk) => {
+      resetWatchdog();
       buffer += chunk.toString('utf8');
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop();
@@ -216,7 +245,11 @@ function connect(targetUrl) {
         }
 
         if (dataLines.length === 0) continue;
-        if (eventType === 'keep-alive') continue;
+
+        if (eventType === 'keep-alive') {
+          // Heartbeat received from Firebase RTDB
+          continue;
+        }
 
         const rawData = dataLines.join('\n');
         try {
@@ -256,15 +289,17 @@ function connect(targetUrl) {
 // Start synchronization
 connect(FIREBASE_URL);
 
-// Keep process alive and handle graceful exit
+// Graceful exit handlers
 process.on('SIGINT', () => {
   console.log('[OmniBridge] Stopping sync process...');
+  clearWatchdog();
   if (activeRequest) activeRequest.destroy();
   process.exit(0);
 });
 
 process.on('SIGTERM', () => {
   console.log('[OmniBridge] Stopping sync process...');
+  clearWatchdog();
   if (activeRequest) activeRequest.destroy();
   process.exit(0);
 });
