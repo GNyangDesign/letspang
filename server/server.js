@@ -41,10 +41,18 @@ function serializePlayers(room) {
     list.push({
       id: player.id,
       nickname: player.nickname,
-      isHost: player.id === room.hostId
+      isHost: player.id === room.hostId,
+      score: player.score || 0
     });
   }
   return list;
+}
+
+/**
+ * Serialize scoreboard sorted by highest score
+ */
+function serializeScores(room) {
+  return serializePlayers(room).sort((a, b) => b.score - a.score);
 }
 
 /**
@@ -134,6 +142,7 @@ wss.on('connection', (ws, req) => {
           id: playerId,
           nickname,
           isHost: true,
+          score: 0,
           ws
         };
 
@@ -183,6 +192,7 @@ wss.on('connection', (ws, req) => {
           id: playerId,
           nickname,
           isHost: false,
+          score: 0,
           ws
         };
 
@@ -196,14 +206,14 @@ wss.on('connection', (ws, req) => {
         sendToSocket(ws, {
           type: 'ROOM_JOINED',
           roomCode: targetCode,
-          player: { id: playerId, nickname, isHost: false },
+          player: { id: playerId, nickname, isHost: false, score: 0 },
           players: serializePlayers(room)
         });
 
         // Broadcast to other players in room
         broadcastToRoom(room, {
           type: 'PLAYER_JOINED',
-          player: { id: playerId, nickname, isHost: false },
+          player: { id: playerId, nickname, isHost: false, score: 0 },
           players: serializePlayers(room)
         }, playerId);
 
@@ -226,13 +236,59 @@ wss.on('connection', (ws, req) => {
         }
 
         room.status = 'PLAYING';
+        // Reset scores when game starts
+        for (const p of room.players.values()) {
+          p.score = 0;
+        }
+
         console.log(`[Server] Game started in room: ${currentRoomCode}`);
 
         broadcastToRoom(room, {
           type: 'GAME_STARTED',
           roomCode: currentRoomCode,
           players: serializePlayers(room),
+          scores: serializeScores(room),
           startTime: Date.now()
+        });
+        break;
+      }
+
+      case 'PLAYER_HIT': {
+        if (!currentRoomCode || !rooms.has(currentRoomCode)) return;
+        const room = rooms.get(currentRoomCode);
+        const shooter = room.players.get(playerId);
+        if (!shooter) return;
+
+        shooter.score = (shooter.score || 0) + 100;
+
+        let victim = null;
+        if (msg.targetId && room.players.has(msg.targetId) && msg.targetId !== playerId) {
+          victim = room.players.get(msg.targetId);
+        } else {
+          for (const [id, p] of room.players) {
+            if (id !== playerId) {
+              victim = p;
+              break;
+            }
+          }
+        }
+
+        if (victim) {
+          sendToSocket(victim.ws, {
+            type: 'GET_HIT',
+            shooterId: playerId,
+            shooterNickname: shooter.nickname,
+            splatColor: msg.color || '#ff007f'
+          });
+        }
+
+        broadcastToRoom(room, {
+          type: 'SCORE_UPDATE',
+          shooterId: playerId,
+          shooterNickname: shooter.nickname,
+          victimNickname: victim ? victim.nickname : '상대',
+          scores: serializeScores(room),
+          hitMessage: `🎯 ${shooter.nickname} 님이 ${victim ? victim.nickname : '상대'} 님에게 명중! (+100)`
         });
         break;
       }

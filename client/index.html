@@ -137,37 +137,66 @@
       </div>
     </section>
 
-    <!-- 3. IN-GAME ARENA (Mobile Portrait / Responsive) -->
+    <!-- 3. IN-GAME ARENA (Mobile AR Camera Battle) -->
     <section id="view-game" class="view-panel" aria-hidden="true">
       <div class="mobile-game-header">
         <span class="game-badge">방: <b id="game-room-code">----</b></span>
-        <span class="game-brand-mini">LET'S PANG 💥</span>
+        <span id="my-score-badge" class="score-badge">내 점수: <b>0</b>점</span>
+        <span id="ai-status-pill" class="ai-status-pill">AI 준비 중...</span>
         <button type="button" id="btn-exit-game" class="exit-mini-btn">나가기</button>
       </div>
 
-      <div class="mobile-canvas-container">
+      <!-- Hit Feed Banner -->
+      <div id="hit-feed" class="hit-feed-banner hidden"></div>
+
+      <div class="mobile-canvas-container" id="arena-container">
+        <!-- Hidden Camera Stream -->
+        <video id="camera-video" playsinline muted autoplay style="display:none;"></video>
+
+        <!-- 60fps Fullscreen Viewfinder Canvas -->
         <canvas id="game-canvas"></canvas>
 
-        <!-- Ink Overlay -->
+        <!-- Camera Permission / Start Prompt -->
+        <div id="camera-prompt-overlay" class="camera-prompt-overlay">
+          <div class="prompt-icon">📷</div>
+          <h3 class="prompt-title">배틀 카메라 켜기</h3>
+          <p class="prompt-desc">상대 플레이어를 비추고 조준하려면 후면 카메라 권한을 허용해 주세요!</p>
+          <button type="button" id="btn-start-camera" class="primary-btn btn-touch-md">
+            <span>배틀 카메라 시작 🚀</span>
+          </button>
+        </div>
+
+        <!-- Target Lock Badge -->
+        <div id="lock-badge" class="lock-indicator hidden">
+          <span class="lock-dot"></span>
+          <span id="lock-text">🎯 상대 포착! 쏘세요!</span>
+        </div>
+
+        <!-- Ink Splatter Overlay -->
         <div id="ink-overlay" class="ink-overlay"></div>
 
         <!-- Shake & Tap Guide -->
         <div id="ink-shake-guide" class="shake-guide hidden">
-          <span>📱 폰을 흔들거나 화면을 연타해 잉크를 털어내세요!</span>
+          <span>📱 폰을 흔들거나 화면을 터치해 잉크를 털어내세요!</span>
         </div>
 
-        <!-- Virtual Joystick Area for mobile touch movement -->
-        <div id="joystick-zone" class="joystick-zone">
-          <div id="joystick-base" class="joystick-base hidden">
-            <div id="joystick-stick" class="joystick-stick"></div>
+        <!-- Floating Big PANG Fire Button -->
+        <button type="button" id="btn-fire" class="fire-btn-floating pulse-fire" aria-label="발사">
+          <div class="fire-btn-inner">
+            <span class="fire-icon">💥</span>
+            <span class="fire-text">PANG!</span>
           </div>
-        </div>
+          <div id="fire-cooldown-ring" class="fire-cooldown-ring"></div>
+        </button>
       </div>
 
       <!-- Mobile In-Game Bottom Bar -->
       <footer class="mobile-game-footer">
-        <div class="mobile-hint-badge">
-          <span>🕹️ 왼쪽 터치 이동 | 오른쪽 터치 발사</span>
+        <button type="button" id="btn-switch-camera" class="sub-action-pill" title="카메라 전환">
+          🔄 전/후면 전환
+        </button>
+        <div id="scoreboard-summary" class="scoreboard-summary">
+          <span id="leaderboard-preview">🏆 랭킹 집계 중...</span>
         </div>
         <button type="button" id="btn-test-splatter" class="splat-test-pill">
           🎨 피격 테스트
