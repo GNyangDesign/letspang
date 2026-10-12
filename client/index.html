@@ -2,37 +2,40 @@
 <html lang="ko">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Let's Pang! - 초간단 실시간 방 대전 게임</title>
-  <meta name="description" content="가입 없이 방 코드만으로 바로 즐기는 실시간 캐주얼 슈팅 대전 게임, 렛츠팡!">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#120b29">
+  <title>Let's Pang! - 초간단 모바일 실시간 방 대전 게임</title>
+  <meta name="description" content="폰으로 가입 없이 방 번호만으로 즐기는 실시간 캐주얼 슈팅 대전 게임, 렛츠팡!">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;600;700&family=Jua&family=Outfit:wght@400;600;800;900&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/src/style.css">
 </head>
 <body>
-  <div id="app" class="game-container">
-    <!-- Server Status Floating Pill -->
-    <header class="top-nav">
+  <div id="app" class="mobile-app-shell">
+    <!-- Top Nav / Connection Status -->
+    <header class="mobile-header">
       <div class="brand">
         <span class="brand-icon">🎈</span>
         <span class="brand-title">Let's Pang!</span>
       </div>
       <div id="connection-pill" class="status-pill status-disconnected">
         <span class="status-dot"></span>
-        <span id="connection-text" class="status-label">서버 연결 중...</span>
+        <span id="connection-text" class="status-label">연결 중...</span>
       </div>
     </header>
 
-    <!-- 1. LOBBY VIEW -->
+    <!-- 1. LOBBY VIEW (Mobile Optimized) -->
     <main id="view-lobby" class="view-panel active">
       <div class="hero-section">
-        <div class="hero-bubble-bg"></div>
         <h1 class="game-logo" id="main-title">
           <span class="logo-text-top">LET'S</span>
           <span class="logo-text-bottom">PANG! 💥</span>
         </h1>
-        <p class="hero-tagline">회원가입 없이 4자리 방 번호로 친구와 즉시 팡팡!</p>
+        <p class="hero-tagline">회원가입 없이 4자리 번호로 폰 대전!</p>
       </div>
 
       <div class="lobby-card glass-panel">
@@ -40,143 +43,136 @@
         <div class="input-group">
           <label for="nickname-input" class="field-label">내 닉네임</label>
           <div class="input-with-button">
-            <input type="text" id="nickname-input" class="custom-input" placeholder="닉네임을 입력하세요" maxlength="10">
-            <button type="button" id="btn-random-nickname" class="secondary-btn" title="랜덤 닉네임 생성">
+            <input type="text" id="nickname-input" class="custom-input" placeholder="닉네임 입력" maxlength="8" autocomplete="off" autocorrect="off">
+            <button type="button" id="btn-random-nickname" class="secondary-btn" title="랜덤 닉네임">
               🎲 랜덤
             </button>
           </div>
         </div>
 
-        <div class="divider">
-          <span>어떻게 시작할까요?</span>
-        </div>
+        <!-- Mobile Action Tabs / Stack -->
+        <div class="mobile-actions-stack">
+          <!-- Create Room -->
+          <button type="button" id="btn-create-room" class="primary-btn btn-touch-lg">
+            <span class="btn-emoji">🚀</span>
+            <div class="btn-text-col">
+              <span class="btn-main-text">새 방 만들기</span>
+              <span class="btn-sub-text">새 4자리 코드를 만들고 친구를 초대해요</span>
+            </div>
+          </button>
 
-        <!-- Join or Create Actions -->
-        <div class="actions-grid">
-          <!-- Create Room Card -->
-          <div class="action-card create-card">
-            <div class="card-icon">🚀</div>
-            <h2 class="card-title">방 만들기</h2>
-            <p class="card-desc">새로운 방을 파고 친구들에게 4자리 코드를 알려주세요!</p>
-            <button type="button" id="btn-create-room" class="primary-btn btn-lg">
-              <span>새 방 만들기</span>
+          <div class="or-divider">
+            <span>또는 방 번호로 바로 들어가기</span>
+          </div>
+
+          <!-- Join Room Input -->
+          <div class="join-box">
+            <input type="text" id="room-code-input" class="custom-input code-input" placeholder="4자리 방 번호" maxlength="5" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+            <button type="button" id="btn-join-room" class="accent-btn btn-touch-md">
+              <span>입장 🔑</span>
             </button>
           </div>
-
-          <!-- Join Room Card -->
-          <div class="action-card join-card">
-            <div class="card-icon">🔑</div>
-            <h2 class="card-title">방 입장하기</h2>
-            <p class="card-desc">친구가 알려준 4~5자리 방 번호를 입력하세요.</p>
-            <div class="join-input-box">
-              <input type="text" id="room-code-input" class="custom-input code-input" placeholder="방 코드 (예: 5821)" maxlength="5">
-              <button type="button" id="btn-join-room" class="accent-btn">
-                <span>입장</span>
-              </button>
-            </div>
-          </div>
         </div>
 
-        <!-- Rule Highlights -->
-        <div class="rule-features">
-          <div class="rule-chip">
-            <span class="chip-icon">⚡</span>
-            <span>회원가입 없음</span>
-          </div>
-          <div class="rule-chip">
-            <span class="chip-icon">🎨</span>
-            <span>잉크 피격 시야 방해</span>
-          </div>
-          <div class="rule-chip">
-            <span class="chip-icon">💥</span>
-            <span>반격 기회 보장</span>
-          </div>
-          <div class="rule-chip">
-            <span class="chip-icon">👥</span>
-            <span>최대 4인 동시 대전</span>
-          </div>
+        <!-- Quick Rule Chips -->
+        <div class="mobile-rule-chips">
+          <div class="chip">⚡ 가입 없는 초고속 매칭</div>
+          <div class="chip">🎨 잉크 피격 시야 방해</div>
+          <div class="chip">📱 폰 흔들어 잉크 털기</div>
+          <div class="chip">👥 2~4인 실시간 대전</div>
         </div>
       </div>
     </main>
 
-    <!-- 2. ROOM WAITING LOBBY VIEW -->
+    <!-- 2. ROOM WAITING LOBBY (Mobile Optimized) -->
     <section id="view-room" class="view-panel" aria-hidden="true">
       <div class="room-card glass-panel">
-        <div class="room-header">
-          <div class="room-meta">
-            <span class="room-badge">대기실</span>
-            <div class="code-box">
-              <span class="code-label">방 번호</span>
-              <span id="display-room-code" class="code-number">----</span>
-              <button type="button" id="btn-copy-code" class="copy-btn" title="방 번호 복사">
-                📋 <span id="copy-tooltip">복사</span>
+        <div class="mobile-room-top">
+          <div class="room-title-row">
+            <span class="room-badge">게임 대기실</span>
+            <button type="button" id="btn-leave-room" class="ghost-btn-sm">
+              🚪 나가기
+            </button>
+          </div>
+
+          <div class="room-code-hero">
+            <span class="code-label">방 번호</span>
+            <span id="display-room-code" class="code-number">----</span>
+            <div class="code-buttons-row">
+              <button type="button" id="btn-copy-code" class="copy-pill-btn">
+                📋 <span id="copy-tooltip">코드 복사</span>
+              </button>
+              <button type="button" id="btn-share-room" class="share-pill-btn">
+                📢 <span id="share-tooltip">친구에게 공유</span>
               </button>
             </div>
           </div>
-          <button type="button" id="btn-leave-room" class="ghost-btn">
-            🚪 나가기
-          </button>
         </div>
 
         <div class="roster-section">
-          <h3 class="roster-title">참가자 목록 (<span id="player-count">1</span>/4)</h3>
-          <div id="player-grid" class="player-grid">
-            <!-- Dynamic player slots inserted by main.js -->
+          <div class="roster-header-row">
+            <span class="roster-title">참가자</span>
+            <span class="roster-count"><span id="player-count">1</span>/4명</span>
+          </div>
+          <div id="player-grid" class="player-grid-mobile">
+            <!-- Dynamic 4 player slots -->
           </div>
         </div>
 
-        <div class="room-footer">
+        <div class="room-bottom-controls">
           <div id="host-controls" class="control-box">
-            <button type="button" id="btn-start-game" class="primary-btn btn-xl pulse-btn" disabled>
+            <button type="button" id="btn-start-game" class="primary-btn btn-touch-lg pulse-btn" disabled>
               <span>🎮 게임 시작하기</span>
             </button>
-            <p id="start-hint" class="hint-text">최소 2명이 모여야 게임을 시작할 수 있습니다.</p>
+            <p id="start-hint" class="hint-text">최소 2명이 모여야 시작할 수 있어요 (친구 초대 중)</p>
           </div>
 
           <div id="guest-controls" class="control-box hidden">
-            <div class="waiting-spinner"></div>
-            <p class="waiting-text">방장님이 게임을 시작하기를 기다리고 있습니다...</p>
+            <div class="waiting-card">
+              <div class="waiting-spinner"></div>
+              <p class="waiting-text">방장님이 시작하기를 기다리고 있어요...</p>
+            </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- 3. IN-GAME ARENA VIEW -->
+    <!-- 3. IN-GAME ARENA (Mobile Portrait / Responsive) -->
     <section id="view-game" class="view-panel" aria-hidden="true">
-      <div class="game-hud">
-        <div class="hud-left">
-          <span class="hud-room">방: <b id="game-room-code">----</b></span>
-        </div>
-        <div class="hud-center">
-          <span class="hud-score">LET'S PANG ARENA</span>
-        </div>
-        <div class="hud-right">
-          <button type="button" id="btn-exit-game" class="ghost-btn-sm">나가기</button>
-        </div>
+      <div class="mobile-game-header">
+        <span class="game-badge">방: <b id="game-room-code">----</b></span>
+        <span class="game-brand-mini">LET'S PANG 💥</span>
+        <button type="button" id="btn-exit-game" class="exit-mini-btn">나가기</button>
       </div>
 
-      <div class="canvas-wrapper">
-        <canvas id="game-canvas" width="800" height="500"></canvas>
+      <div class="mobile-canvas-container">
+        <canvas id="game-canvas"></canvas>
 
-        <!-- Ink Overlay Container for Stress-Relief Splatter Effect -->
-        <div id="ink-overlay" class="ink-overlay">
-          <!-- Ink splatters will appear here -->
-        </div>
+        <!-- Ink Overlay -->
+        <div id="ink-overlay" class="ink-overlay"></div>
 
+        <!-- Shake & Tap Guide -->
         <div id="ink-shake-guide" class="shake-guide hidden">
-          <span>🌀 잉크를 털어내세요! (화면 흔들기 / 스페이스바 연타)</span>
+          <span>📱 폰을 흔들거나 화면을 연타해 잉크를 털어내세요!</span>
+        </div>
+
+        <!-- Virtual Joystick Area for mobile touch movement -->
+        <div id="joystick-zone" class="joystick-zone">
+          <div id="joystick-base" class="joystick-base hidden">
+            <div id="joystick-stick" class="joystick-stick"></div>
+          </div>
         </div>
       </div>
 
-      <div class="game-controls-bar">
-        <div class="control-hints">
-          <span class="key-pill">이동: 방향키 / WASD</span>
-          <span class="key-pill">발사: 마우스 클릭 / 스페이스바</span>
+      <!-- Mobile In-Game Bottom Bar -->
+      <footer class="mobile-game-footer">
+        <div class="mobile-hint-badge">
+          <span>🕹️ 왼쪽 터치 이동 | 오른쪽 터치 발사</span>
         </div>
-        <button type="button" id="btn-test-splatter" class="secondary-btn-sm">
-          🎨 피격 잉크 효과 테스트
+        <button type="button" id="btn-test-splatter" class="splat-test-pill">
+          🎨 피격 테스트
         </button>
-      </div>
+      </footer>
     </section>
 
     <!-- Global Toast Notification -->

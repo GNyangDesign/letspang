@@ -1,6 +1,6 @@
 /**
- * Let's Pang! - Main Client Application Logic
- * Real-time WebSocket room matching & casual shooter prototype
+ * Let's Pang! - Mobile-First Realtime Web Casual Shooter
+ * Built for smartphones & touch screens
  */
 
 // Fun random nicknames for casual arcade players
@@ -10,7 +10,6 @@ const RANDOM_NICKNAMES = [
   '바람돌이', '젤리베어', '슈퍼팡팡', '통통토끼', '날쌘돌이'
 ];
 
-// Fun avatar emoticons for 4 slots
 const AVATARS = ['🐰', '🐱', '🐶', '🦊'];
 
 // DOM Element References
@@ -30,6 +29,7 @@ const btnJoinRoom = document.getElementById('btn-join-room');
 const displayRoomCode = document.getElementById('display-room-code');
 const btnCopyCode = document.getElementById('btn-copy-code');
 const copyTooltip = document.getElementById('copy-tooltip');
+const btnShareRoom = document.getElementById('btn-share-room');
 const btnLeaveRoom = document.getElementById('btn-leave-room');
 const playerGrid = document.getElementById('player-grid');
 const playerCountSpan = document.getElementById('player-count');
@@ -46,13 +46,16 @@ const inkShakeGuide = document.getElementById('ink-shake-guide');
 const btnTestSplatter = document.getElementById('btn-test-splatter');
 const toastBox = document.getElementById('toast');
 
+// Virtual Joystick DOM
+const joystickBase = document.getElementById('joystick-base');
+const joystickStick = document.getElementById('joystick-stick');
+
 // Application State
 let socket = null;
 let myPlayerId = null;
-let currentRoom = null; // { code, hostId, players: [] }
+let currentRoom = null;
 let isHost = false;
 let pingInterval = null;
-let inkClearTimeout = null;
 
 // Determine WebSocket URL from environment or default
 function getWebSocketUrl() {
@@ -61,15 +64,25 @@ function getWebSocketUrl() {
 
   const isHttps = window.location.protocol === 'https:';
   const protocol = isHttps ? 'wss:' : 'ws:';
-  // If running locally, default to backend port 3001
   if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
     return `${protocol}//localhost:3001`;
   }
-  // Production fallback: same host on wss
+  // Production: Vultr socket server (or same host fallback)
   return `${protocol}//${window.location.host}`;
 }
 
 const WS_URL = getWebSocketUrl();
+
+/**
+ * Mobile Haptic Feedback Helper
+ */
+function triggerHaptic(duration = 20) {
+  if (typeof navigator !== 'undefined' && navigator.vibrate) {
+    try {
+      navigator.vibrate(duration);
+    } catch (_) {}
+  }
+}
 
 /**
  * Toast Notification Helper
@@ -81,7 +94,7 @@ function showToast(message) {
   toastBox.classList.remove('hidden');
   toastTimeout = setTimeout(() => {
     toastBox.classList.add('hidden');
-  }, 3000);
+  }, 2600);
 }
 
 /**
@@ -103,13 +116,20 @@ function switchView(viewName) {
 }
 
 /**
- * Setup Nickname Management
+ * Setup Nickname Management & URL Room Auto-Fill
  */
 function getRandomNickname() {
   return RANDOM_NICKNAMES[Math.floor(Math.random() * RANDOM_NICKNAMES.length)];
 }
 
-function initNickname() {
+function initLobbyInputs() {
+  // Check URL query param for room (e.g. ?room=4821)
+  const urlParams = new URLSearchParams(window.location.search);
+  const roomParam = urlParams.get('room');
+  if (roomParam) {
+    roomCodeInput.value = roomParam.trim().slice(0, 5);
+  }
+
   const saved = localStorage.getItem('letspang_nickname');
   if (saved) {
     nicknameInput.value = saved;
@@ -125,11 +145,10 @@ nicknameInput.addEventListener('input', () => {
 });
 
 btnRandomNickname.addEventListener('click', () => {
+  triggerHaptic(15);
   const newName = getRandomNickname();
   nicknameInput.value = newName;
   localStorage.setItem('letspang_nickname', newName);
-  nicknameInput.classList.add('pulse');
-  setTimeout(() => nicknameInput.classList.remove('pulse'), 300);
 });
 
 /**
@@ -137,13 +156,12 @@ btnRandomNickname.addEventListener('click', () => {
  */
 function connectWebSocket() {
   connectionPill.className = 'status-pill status-disconnected';
-  connectionText.textContent = '서버 연결 중...';
+  connectionText.textContent = '연결 중...';
 
   try {
     socket = new WebSocket(WS_URL);
   } catch (err) {
-    console.error('Socket init error:', err);
-    connectionText.textContent = '연결 실패';
+    connectionText.textContent = '오프라인';
     setTimeout(connectWebSocket, 3000);
     return;
   }
@@ -151,9 +169,7 @@ function connectWebSocket() {
   socket.onopen = () => {
     connectionPill.className = 'status-pill status-connected';
     connectionText.textContent = '서버 연결됨';
-    console.log('[Let\'s Pang] Connected to game server:', WS_URL);
 
-    // Heartbeat ping every 20 seconds
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       if (socket && socket.readyState === WebSocket.OPEN) {
@@ -176,13 +192,10 @@ function connectWebSocket() {
     connectionPill.className = 'status-pill status-disconnected';
     connectionText.textContent = '연결 끊김';
     if (pingInterval) clearInterval(pingInterval);
-    console.warn('[Let\'s Pang] Disconnected from server. Reconnecting in 3s...');
     setTimeout(connectWebSocket, 3000);
   };
 
-  socket.onerror = (err) => {
-    console.error('[Let\'s Pang] Socket error:', err);
-  };
+  socket.onerror = () => {};
 }
 
 function send(type, payload = {}) {
@@ -209,9 +222,10 @@ function handleServerMessage(msg) {
         players: msg.players
       };
       isHost = true;
+      triggerHaptic(40);
       updateRoomUI();
       switchView('room');
-      showToast(`🎉 방이 생성되었습니다! 방 코드: ${msg.roomCode}`);
+      showToast(`🎉 방이 생성되었습니다! 방 번호: ${msg.roomCode}`);
       break;
 
     case 'ROOM_JOINED':
@@ -220,14 +234,16 @@ function handleServerMessage(msg) {
         players: msg.players
       };
       isHost = msg.player.isHost;
+      triggerHaptic(40);
       updateRoomUI();
       switchView('room');
-      showToast(`🔑 방에 입장했습니다! (방 코드: ${msg.roomCode})`);
+      showToast(`🔑 방에 입장했습니다! (${msg.roomCode})`);
       break;
 
     case 'PLAYER_JOINED':
       if (currentRoom) {
         currentRoom.players = msg.players;
+        triggerHaptic(30);
         updateRoomUI();
         showToast(`👋 ${msg.player.nickname} 님이 입장했습니다!`);
       }
@@ -236,11 +252,10 @@ function handleServerMessage(msg) {
     case 'PLAYER_LEFT':
       if (currentRoom) {
         currentRoom.players = msg.players;
-        // Check if I became the new host
         const me = msg.players.find(p => p.id === myPlayerId);
         if (me && me.isHost && !isHost) {
           isHost = true;
-          showToast('👑 방장님이 퇴장하여 새로운 방장이 되었습니다!');
+          showToast('👑 내가 새로운 방장이 되었습니다!');
         } else {
           showToast(`🚪 ${msg.nickname} 님이 퇴장했습니다.`);
         }
@@ -250,19 +265,17 @@ function handleServerMessage(msg) {
 
     case 'GAME_STARTED':
       gameRoomCode.textContent = msg.roomCode;
+      triggerHaptic([50, 50, 80]);
       switchView('game');
-      showToast('🚀 게임이 시작되었습니다! Let\'s Pang!');
+      showToast('🚀 게임 시작! Let\'s Pang!');
       break;
 
     case 'ERROR':
+      triggerHaptic(50);
       showToast(`❌ ${msg.message}`);
       break;
 
-    case 'PONG':
-      break;
-
     default:
-      console.log('Unhandled packet:', msg);
       break;
   }
 }
@@ -277,18 +290,16 @@ function updateRoomUI() {
   const count = currentRoom.players.length;
   playerCountSpan.textContent = count;
 
-  // Toggle Host vs Guest controls
   if (isHost) {
     hostControls.classList.remove('hidden');
     guestControls.classList.add('hidden');
-    // Enable start button if at least 2 players
     if (count >= 2) {
       btnStartGame.removeAttribute('disabled');
       startHint.textContent = '준비 완료! 시작 버튼을 눌러 게임을 시작하세요.';
       startHint.style.color = '#00e676';
     } else {
       btnStartGame.setAttribute('disabled', 'true');
-      startHint.textContent = '최소 2명이 모여야 게임을 시작할 수 있습니다. (친구 초대 중)';
+      startHint.textContent = '최소 2명이 모여야 시작할 수 있어요 (친구 초대 중)';
       startHint.style.color = 'var(--text-muted)';
     }
   } else {
@@ -296,7 +307,7 @@ function updateRoomUI() {
     guestControls.classList.remove('hidden');
   }
 
-  // Render 4 Player Slots
+  // Render 4 Player Slots for mobile grid
   playerGrid.innerHTML = '';
   for (let i = 0; i < 4; i++) {
     const player = currentRoom.players[i];
@@ -320,8 +331,8 @@ function updateRoomUI() {
       `;
     } else {
       slot.innerHTML = `
-        <div class="slot-avatar" style="opacity: 0.3">➕</div>
-        <div class="slot-empty-text">친구 대기 중...</div>
+        <div class="slot-avatar" style="opacity: 0.25">➕</div>
+        <div class="slot-empty-text">친구 대기</div>
       `;
     }
 
@@ -343,14 +354,16 @@ function escapeHtml(str) {
  * Room Actions Event Listeners
  */
 btnCreateRoom.addEventListener('click', () => {
+  triggerHaptic(20);
   const nickname = nicknameInput.value.trim() || getRandomNickname();
   send('CREATE_ROOM', { nickname });
 });
 
 btnJoinRoom.addEventListener('click', () => {
+  triggerHaptic(20);
   const code = roomCodeInput.value.trim();
   if (!code) {
-    showToast('⚠️ 입장할 방 코드를 입력해 주세요.');
+    showToast('⚠️ 입장할 방 번호를 입력해 주세요.');
     roomCodeInput.focus();
     return;
   }
@@ -366,19 +379,45 @@ roomCodeInput.addEventListener('keydown', (e) => {
 
 btnCopyCode.addEventListener('click', async () => {
   if (!currentRoom) return;
+  triggerHaptic(15);
   try {
     await navigator.clipboard.writeText(currentRoom.code);
-    copyTooltip.textContent = '복사됨! ✅';
-    showToast(`📋 방 코드 [${currentRoom.code}]가 클립보드에 복사되었습니다!`);
-    setTimeout(() => {
-      copyTooltip.textContent = '복사';
-    }, 2000);
+    copyTooltip.textContent = '복사 완료! ✅';
+    showToast(`📋 방 번호 [${currentRoom.code}] 복사 완료!`);
+    setTimeout(() => { copyTooltip.textContent = '코드 복사'; }, 2000);
   } catch (err) {
-    showToast(`방 코드: ${currentRoom.code}`);
+    showToast(`방 번호: ${currentRoom.code}`);
+  }
+});
+
+// Mobile Web Share API Integration
+btnShareRoom.addEventListener('click', async () => {
+  if (!currentRoom) return;
+  triggerHaptic(20);
+
+  const shareUrl = `${window.location.origin}${window.location.pathname}?room=${currentRoom.code}`;
+  const shareData = {
+    title: "Let's Pang! 🎈",
+    text: `초간단 실시간 대전 게임! 방 번호 [${currentRoom.code}]로 들어와서 같이 팡팡 터뜨리자!`,
+    url: shareUrl
+  };
+
+  if (navigator.share) {
+    try {
+      await navigator.share(shareData);
+    } catch (_) {}
+  } else {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      showToast('📢 친구 초대 링크가 클립보드에 복사되었습니다!');
+    } catch (_) {
+      showToast(`초대 링크: ${shareUrl}`);
+    }
   }
 });
 
 btnLeaveRoom.addEventListener('click', () => {
+  triggerHaptic(20);
   send('LEAVE_ROOM');
   currentRoom = null;
   isHost = false;
@@ -386,10 +425,12 @@ btnLeaveRoom.addEventListener('click', () => {
 });
 
 btnStartGame.addEventListener('click', () => {
+  triggerHaptic(30);
   send('START_GAME');
 });
 
 btnExitGame.addEventListener('click', () => {
+  triggerHaptic(20);
   send('LEAVE_ROOM');
   currentRoom = null;
   isHost = false;
@@ -397,14 +438,16 @@ btnExitGame.addEventListener('click', () => {
 });
 
 /**
- * Stress-Relief Ink Splatter Hit Effect (핵심 피격 메커니즘)
- * - 잉크 오버레이로 시야를 가리되, 조준선 흔들림 & 반격 여지 보장
- * - 1.5~2초 페이드아웃 또는 흔들기/스페이스바 연타로 빠른 제거
+ * Stress-Relief Ink Splatter Hit Effect (모바일 최적화)
+ * - 잉크가 시야를 가림 (반격 가능)
+ * - 1.8초 페이드아웃 + 폰 흔들기(Shake) 또는 화면 탭으로 잉크 털기
  */
 function triggerInkSplatter(xPercent, yPercent) {
+  triggerHaptic([40, 30, 60]); // Hit vibration pattern
+
   const x = xPercent !== undefined ? xPercent : 20 + Math.random() * 60;
   const y = yPercent !== undefined ? yPercent : 20 + Math.random() * 60;
-  const size = 120 + Math.random() * 100;
+  const size = 110 + Math.random() * 90;
 
   const splat = document.createElement('div');
   splat.className = 'ink-splat';
@@ -413,7 +456,6 @@ function triggerInkSplatter(xPercent, yPercent) {
   splat.style.width = `${size}px`;
   splat.style.height = `${size}px`;
 
-  // Organic blob border radius
   const r1 = 30 + Math.random() * 40;
   const r2 = 30 + Math.random() * 40;
   const r3 = 30 + Math.random() * 40;
@@ -423,7 +465,6 @@ function triggerInkSplatter(xPercent, yPercent) {
   inkOverlay.appendChild(splat);
   inkShakeGuide.classList.remove('hidden');
 
-  // Fade and clean up after 1.8s
   setTimeout(() => {
     splat.remove();
     if (inkOverlay.children.length === 0) {
@@ -432,102 +473,217 @@ function triggerInkSplatter(xPercent, yPercent) {
   }, 1800);
 }
 
-// Interactive test button for ink splatter
-btnTestSplatter.addEventListener('click', () => {
-  for (let i = 0; i < 3; i++) {
-    setTimeout(() => {
-      triggerInkSplatter();
-    }, i * 150);
-  }
-});
-
-// Spacebar or Shake clears ink faster
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && inkOverlay.children.length > 0) {
-    const firstSplat = inkOverlay.firstElementChild;
-    if (firstSplat) {
-      firstSplat.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
-      firstSplat.style.opacity = '0';
-      firstSplat.style.transform = 'translate(-50%, -50%) scale(1.4)';
+// Clear ink by tapping on ink overlay
+inkOverlay.addEventListener('pointerdown', (e) => {
+  if (inkOverlay.children.length > 0) {
+    const first = inkOverlay.firstElementChild;
+    if (first) {
+      triggerHaptic(15);
+      first.style.transition = 'all 0.15s ease';
+      first.style.opacity = '0';
+      first.style.transform = 'translate(-50%, -50%) scale(1.3)';
       setTimeout(() => {
-        firstSplat.remove();
+        first.remove();
         if (inkOverlay.children.length === 0) {
           inkShakeGuide.classList.add('hidden');
         }
-      }, 200);
+      }, 150);
     }
   }
 });
 
+btnTestSplatter.addEventListener('click', () => {
+  for (let i = 0; i < 3; i++) {
+    setTimeout(() => { triggerInkSplatter(); }, i * 140);
+  }
+});
+
+// Physical Shake Detection (DeviceMotionEvent)
+let lastShakeTime = 0;
+let lastX = null, lastY = null, lastZ = null;
+
+if (typeof window !== 'undefined' && 'DeviceMotionEvent' in window) {
+  window.addEventListener('devicemotion', (e) => {
+    if (inkOverlay.children.length === 0) return;
+
+    const acc = e.accelerationIncludingGravity;
+    if (!acc) return;
+
+    const now = Date.now();
+    if (now - lastShakeTime < 180) return;
+
+    if (lastX !== null) {
+      const delta = Math.abs(acc.x - lastX) + Math.abs(acc.y - lastY) + Math.abs(acc.z - lastZ);
+      if (delta > 22) { // Shake threshold
+        lastShakeTime = now;
+        triggerHaptic(25);
+        const splat = inkOverlay.firstElementChild;
+        if (splat) {
+          splat.remove();
+          if (inkOverlay.children.length === 0) {
+            inkShakeGuide.classList.add('hidden');
+          }
+        }
+      }
+    }
+    lastX = acc.x;
+    lastY = acc.y;
+    lastZ = acc.z;
+  });
+}
+
 /**
- * 2D Canvas Interactive Game Prototype Loop
+ * 2D Canvas Interactive Game Engine (Mobile Touch Joystick + Tap-to-Shoot)
  */
 let canvasCtx = null;
-let playerPos = { x: 400, y: 250, vx: 0, vy: 0 };
-let keys = {};
+let playerPos = { x: 200, y: 200 };
+let joystickActive = false;
+let joystickStart = { x: 0, y: 0 };
+let moveVector = { x: 0, y: 0 };
 let projectiles = [];
 
 function initGameCanvas() {
   canvasCtx = gameCanvas.getContext('2d');
+  resizeCanvas();
+  window.addEventListener('resize', resizeCanvas);
 
-  window.addEventListener('keydown', (e) => { keys[e.key] = true; });
-  window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+  // Touch controls on canvas container
+  const container = gameCanvas.parentElement;
 
-  gameCanvas.addEventListener('click', (e) => {
-    const rect = gameCanvas.getBoundingClientRect();
-    const targetX = (e.clientX - rect.left) * (gameCanvas.width / rect.width);
-    const targetY = (e.clientY - rect.top) * (gameCanvas.height / rect.height);
+  container.addEventListener('pointerdown', (e) => {
+    const rect = container.getBoundingClientRect();
+    const touchX = e.clientX - rect.left;
+    const touchY = e.clientY - rect.top;
 
-    const angle = Math.atan2(targetY - playerPos.y, targetX - playerPos.x);
-    projectiles.push({
-      x: playerPos.x,
-      y: playerPos.y,
-      vx: Math.cos(angle) * 7,
-      vy: Math.sin(angle) * 7,
-      radius: 8,
-      color: '#ff4785',
-      life: 80
-    });
+    // Left half: Virtual Joystick for movement
+    if (touchX < rect.width * 0.48) {
+      joystickActive = true;
+      joystickStart = { x: touchX, y: touchY };
+      joystickBase.style.left = `${touchX}px`;
+      joystickBase.style.top = `${touchY}px`;
+      joystickStick.style.transform = 'translate(-50%, -50%)';
+      joystickBase.classList.remove('hidden');
+      triggerHaptic(10);
+    } else {
+      // Right half: Aim & Shoot Bubble
+      shootProjectile(touchX, touchY, rect.width, rect.height);
+    }
+  });
+
+  container.addEventListener('pointermove', (e) => {
+    if (!joystickActive) return;
+    const rect = container.getBoundingClientRect();
+    const currentX = e.clientX - rect.left;
+    const currentY = e.clientY - rect.top;
+
+    const dx = currentX - joystickStart.x;
+    const dy = currentY - joystickStart.y;
+    const dist = Math.hypot(dx, dy);
+    const maxRadius = 38;
+
+    const angle = Math.atan2(dy, dx);
+    const clampedDist = Math.min(dist, maxRadius);
+
+    const stickX = Math.cos(angle) * clampedDist;
+    const stickY = Math.sin(angle) * clampedDist;
+
+    joystickStick.style.transform = `translate(calc(-50% + ${stickX}px), calc(-50% + ${stickY}px))`;
+
+    moveVector = {
+      x: (stickX / maxRadius) * 4.5,
+      y: (stickY / maxRadius) * 4.5
+    };
+  });
+
+  const stopJoystick = () => {
+    if (joystickActive) {
+      joystickActive = false;
+      moveVector = { x: 0, y: 0 };
+      joystickBase.classList.add('hidden');
+    }
+  };
+
+  container.addEventListener('pointerup', stopJoystick);
+  container.addEventListener('pointercancel', stopJoystick);
+
+  // Desktop keyboard controls fallback
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W') moveVector.y = -4.5;
+    if (e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') moveVector.y = 4.5;
+    if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') moveVector.x = -4.5;
+    if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') moveVector.x = 4.5;
+  });
+
+  window.addEventListener('keyup', (e) => {
+    if (['ArrowUp', 'ArrowDown', 'w', 's', 'W', 'S'].includes(e.key)) moveVector.y = 0;
+    if (['ArrowLeft', 'ArrowRight', 'a', 'd', 'A', 'D'].includes(e.key)) moveVector.x = 0;
   });
 
   requestAnimationFrame(gameLoop);
 }
 
+function resizeCanvas() {
+  const container = gameCanvas.parentElement;
+  if (!container) return;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = container.getBoundingClientRect();
+
+  gameCanvas.width = rect.width * dpr;
+  gameCanvas.height = rect.height * dpr;
+  if (canvasCtx) {
+    canvasCtx.scale(dpr, dpr);
+  }
+}
+
+function shootProjectile(targetX, targetY, containerW, containerH) {
+  triggerHaptic(20);
+  const angle = Math.atan2(targetY - playerPos.y, targetX - playerPos.x);
+
+  projectiles.push({
+    x: playerPos.x,
+    y: playerPos.y,
+    vx: Math.cos(angle) * 8,
+    vy: Math.sin(angle) * 8,
+    radius: 7,
+    color: '#ff4785',
+    life: 70
+  });
+}
+
 function gameLoop() {
   if (!viewGame.classList.contains('active')) return;
 
-  // Update Movement
-  const speed = 4;
-  if (keys['ArrowUp'] || keys['w'] || keys['W']) playerPos.y -= speed;
-  if (keys['ArrowDown'] || keys['s'] || keys['S']) playerPos.y += speed;
-  if (keys['ArrowLeft'] || keys['a'] || keys['A']) playerPos.x -= speed;
-  if (keys['ArrowRight'] || keys['d'] || keys['D']) playerPos.x += speed;
+  const container = gameCanvas.parentElement;
+  const w = container ? container.clientWidth : 360;
+  const h = container ? container.clientHeight : 400;
 
-  // Boundary clamp
-  playerPos.x = Math.max(30, Math.min(gameCanvas.width - 30, playerPos.x));
-  playerPos.y = Math.max(30, Math.min(gameCanvas.height - 30, playerPos.y));
+  // Move Player
+  playerPos.x += moveVector.x;
+  playerPos.y += moveVector.y;
+  playerPos.x = Math.max(25, Math.min(w - 25, playerPos.x));
+  playerPos.y = Math.max(25, Math.min(h - 25, playerPos.y));
 
   // Render Background
-  canvasCtx.fillStyle = '#160e36';
-  canvasCtx.fillRect(0, 0, gameCanvas.width, gameCanvas.height);
+  canvasCtx.fillStyle = '#140c30';
+  canvasCtx.fillRect(0, 0, w, h);
 
-  // Grid lines
-  canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+  // Subtle Grid
+  canvasCtx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
   canvasCtx.lineWidth = 1;
-  for (let x = 0; x < gameCanvas.width; x += 40) {
+  for (let x = 0; x < w; x += 36) {
     canvasCtx.beginPath();
     canvasCtx.moveTo(x, 0);
-    canvasCtx.lineTo(x, gameCanvas.height);
+    canvasCtx.lineTo(x, h);
     canvasCtx.stroke();
   }
-  for (let y = 0; y < gameCanvas.height; y += 40) {
+  for (let y = 0; y < h; y += 36) {
     canvasCtx.beginPath();
     canvasCtx.moveTo(0, y);
-    canvasCtx.lineTo(gameCanvas.width, y);
+    canvasCtx.lineTo(w, y);
     canvasCtx.stroke();
   }
 
-  // Update & Render Projectiles
+  // Render Projectiles
   for (let i = projectiles.length - 1; i >= 0; i--) {
     const p = projectiles[i];
     p.x += p.vx;
@@ -542,33 +698,39 @@ function gameLoop() {
     canvasCtx.fill();
     canvasCtx.shadowBlur = 0;
 
-    if (p.life <= 0 || p.x < 0 || p.x > gameCanvas.width || p.y < 0 || p.y > gameCanvas.height) {
+    if (p.life <= 0 || p.x < 0 || p.x > w || p.y < 0 || p.y > h) {
       projectiles.splice(i, 1);
     }
   }
 
-  // Render Player Character
+  // Render Player Character (Cute Bubble Character)
   canvasCtx.beginPath();
-  canvasCtx.arc(playerPos.x, playerPos.y, 22, 0, Math.PI * 2);
+  canvasCtx.arc(playerPos.x, playerPos.y, 20, 0, Math.PI * 2);
   canvasCtx.fillStyle = '#00e5ff';
   canvasCtx.shadowColor = '#00e5ff';
-  canvasCtx.shadowBlur = 16;
+  canvasCtx.shadowBlur = 14;
   canvasCtx.fill();
   canvasCtx.shadowBlur = 0;
   canvasCtx.lineWidth = 3;
   canvasCtx.strokeStyle = '#fff';
   canvasCtx.stroke();
 
-  // Draw Nickname Label above player
-  canvasCtx.font = 'bold 13px Fredoka, Outfit, sans-serif';
-  canvasCtx.fillStyle = '#fff';
+  // Face Emoticon on player
+  canvasCtx.font = '16px Fredoka, sans-serif';
   canvasCtx.textAlign = 'center';
+  canvasCtx.textBaseline = 'middle';
+  canvasCtx.fillText('🐰', playerPos.x, playerPos.y + 1);
+
+  // Nickname Label
+  canvasCtx.font = 'bold 12px Fredoka, Outfit, sans-serif';
+  canvasCtx.fillStyle = '#fff';
+  canvasCtx.textBaseline = 'bottom';
   const myName = nicknameInput.value.trim() || '나';
-  canvasCtx.fillText(myName, playerPos.x, playerPos.y - 32);
+  canvasCtx.fillText(myName, playerPos.x, playerPos.y - 26);
 
   requestAnimationFrame(gameLoop);
 }
 
 // Initialize on Load
-initNickname();
+initLobbyInputs();
 connectWebSocket();
