@@ -1,6 +1,6 @@
 /**
  * Let's Pang! - Realtime AR Paintball Battle Web Game
- * Uses Smartphone Camera + MediaPipe On-Device Person Detection + WebSocket
+ * Splatfight / Splatoon Aesthetic with Smartphone Camera + MediaPipe Person Detection + WebSocket
  */
 
 import { ObjectDetector, FilesetResolver } from '@mediapipe/tasks-vision';
@@ -13,9 +13,8 @@ const RANDOM_NICKNAMES = [
 ];
 
 const AVATARS = ['🐰', '🐱', '🐶', '🦊'];
-const PAINT_COLORS = ['#ff007f', '#00e5ff', '#ffd000', '#00e676', '#ff5722', '#b388ff'];
 
-// DOM Element References
+// DOM Element References - Lobby & Room
 const connectionPill = document.getElementById('connection-pill');
 const connectionText = document.getElementById('connection-text');
 const nicknameInput = document.getElementById('nickname-input');
@@ -41,10 +40,11 @@ const guestControls = document.getElementById('guest-controls');
 const btnStartGame = document.getElementById('btn-start-game');
 const startHint = document.getElementById('start-hint');
 
-// In-Game DOM References
-const gameRoomCode = document.getElementById('game-room-code');
-const myScoreBadge = document.getElementById('my-score-badge');
-const aiStatusPill = document.getElementById('ai-status-pill');
+// DOM References - Splatfight Battle Arena HUD
+const scoreBlueEl = document.getElementById('score-blue');
+const scoreRedEl = document.getElementById('score-red');
+const matchTimerEl = document.getElementById('match-timer');
+const ammoFillEl = document.getElementById('ammo-fill');
 const btnExitGame = document.getElementById('btn-exit-game');
 const hitFeed = document.getElementById('hit-feed');
 
@@ -53,13 +53,17 @@ const cameraVideo = document.getElementById('camera-video');
 const gameCanvas = document.getElementById('game-canvas');
 const cameraPromptOverlay = document.getElementById('camera-prompt-overlay');
 const btnStartCamera = document.getElementById('btn-start-camera');
-const lockBadge = document.getElementById('lock-badge');
-const lockText = document.getElementById('lock-text');
+
+const lockBadgeTop = document.getElementById('lock-badge-top');
+const lockBadgeBottom = document.getElementById('lock-badge-bottom');
+const lockBottomText = document.getElementById('lock-bottom-text');
+
 const inkOverlay = document.getElementById('ink-overlay');
 const inkShakeGuide = document.getElementById('ink-shake-guide');
 const btnFire = document.getElementById('btn-fire');
 const btnSwitchCamera = document.getElementById('btn-switch-camera');
-const leaderboardPreview = document.getElementById('leaderboard-preview');
+const myTeamBadge = document.getElementById('my-team-badge');
+const aiStatusPill = document.getElementById('ai-status-pill');
 const btnTestSplatter = document.getElementById('btn-test-splatter');
 const toastBox = document.getElementById('toast');
 
@@ -69,22 +73,29 @@ let myPlayerId = null;
 let currentRoom = null;
 let isHost = false;
 let pingInterval = null;
-let myScore = 0;
-let myColor = PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)];
+
+// Team & Gameplay State
+let myTeam = 'BLUE'; // 'BLUE' or 'RED'
+let opponentTeam = 'RED';
+let teamScores = { blue: 0, red: 0 };
+let currentAmmo = 100; // 0 - 100
+const MAX_AMMO = 100;
+const AMMO_PER_SHOT = 20;
+let matchRemainingSeconds = 150;
+let matchTimerInterval = null;
 
 // Camera & Vision State
 let objectDetector = null;
 let isDetectorLoading = false;
 let isDetectorReady = false;
 let cameraStream = null;
-let facingMode = 'environment'; // default rear camera
+let facingMode = 'environment';
 let isCameraActive = false;
 
 let detectedPeople = [];
-let lastInferenceTime = 0;
 let isLockedOn = false;
 let lockedDistance = null;
-let lastLockTime = 0; // debounce buffer (0.25s)
+let lastLockTime = 0; // debounce buffer (0.28s)
 
 // Audio Context (Synthesized sound effects)
 let audioCtx = null;
@@ -101,7 +112,6 @@ function getAudioContext() {
   return audioCtx;
 }
 
-// Sound Synthesizers
 function playShootSound() {
   try {
     const ctx = getAudioContext();
@@ -110,16 +120,35 @@ function playShootSound() {
     const gain = ctx.createGain();
 
     osc.type = 'triangle';
-    osc.frequency.setValueAtTime(380, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(110, ctx.currentTime + 0.12);
+    osc.frequency.setValueAtTime(420, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(120, ctx.currentTime + 0.12);
 
-    gain.gain.setValueAtTime(0.4, ctx.currentTime);
+    gain.gain.setValueAtTime(0.45, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
     osc.stop(ctx.currentTime + 0.13);
+  } catch (_) {}
+}
+
+function playEmptyAmmoSound() {
+  try {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'square';
+    osc.frequency.setValueAtTime(140, ctx.currentTime);
+    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.06);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.07);
   } catch (_) {}
 }
 
@@ -131,16 +160,16 @@ function playHitSound() {
     const gain = ctx.createGain();
 
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(520, ctx.currentTime);
-    osc.frequency.setValueAtTime(780, ctx.currentTime + 0.08);
+    osc.frequency.setValueAtTime(540, ctx.currentTime);
+    osc.frequency.setValueAtTime(880, ctx.currentTime + 0.09);
 
-    gain.gain.setValueAtTime(0.5, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.22);
+    gain.gain.setValueAtTime(0.55, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.23);
+    osc.stop(ctx.currentTime + 0.26);
   } catch (_) {}
 }
 
@@ -152,20 +181,20 @@ function playSplatSound() {
     const gain = ctx.createGain();
 
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(180, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.18);
+    osc.frequency.setValueAtTime(190, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(60, ctx.currentTime + 0.2);
 
-    gain.gain.setValueAtTime(0.6, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.18);
+    gain.gain.setValueAtTime(0.65, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.2);
 
     osc.connect(gain);
     gain.connect(ctx.destination);
     osc.start();
-    osc.stop(ctx.currentTime + 0.19);
+    osc.stop(ctx.currentTime + 0.21);
   } catch (_) {}
 }
 
-// WebSocket URL Determination
+// WebSocket URL
 function getWebSocketUrl() {
   const envUrl = import.meta.env.VITE_WS_URL;
   if (envUrl) return envUrl;
@@ -176,7 +205,7 @@ function getWebSocketUrl() {
 }
 const WS_URL = getWebSocketUrl();
 
-// Haptic Feedback
+// Haptic & Toast
 function triggerHaptic(pattern = 20) {
   if (typeof navigator !== 'undefined' && navigator.vibrate) {
     try {
@@ -185,7 +214,6 @@ function triggerHaptic(pattern = 20) {
   }
 }
 
-// Toast
 let toastTimeout = null;
 function showToast(message) {
   if (toastTimeout) clearTimeout(toastTimeout);
@@ -196,7 +224,7 @@ function showToast(message) {
   }, 2600);
 }
 
-// Switch Screens
+// View Switching
 function switchView(viewName) {
   viewLobby.classList.remove('active');
   viewRoom.classList.remove('active');
@@ -205,16 +233,18 @@ function switchView(viewName) {
   if (viewName === 'lobby') {
     viewLobby.classList.add('active');
     stopCamera();
+    stopMatchTimer();
   } else if (viewName === 'room') {
     viewRoom.classList.add('active');
     stopCamera();
+    stopMatchTimer();
   } else if (viewName === 'game') {
     viewGame.classList.add('active');
     enterBattleArena();
   }
 }
 
-// Nickname Helpers
+// Lobby Nickname Management
 function getRandomNickname() {
   return RANDOM_NICKNAMES[Math.floor(Math.random() * RANDOM_NICKNAMES.length)];
 }
@@ -247,7 +277,7 @@ btnRandomNickname.addEventListener('click', () => {
   localStorage.setItem('letspang_nickname', newName);
 });
 
-// WebSocket Connection
+// WebSocket Setup
 function connectWebSocket() {
   connectionPill.className = 'status-pill status-disconnected';
   connectionText.textContent = '연결 중...';
@@ -301,7 +331,7 @@ function send(type, payload = {}) {
   return true;
 }
 
-// Server Message Handler
+// Handle Server Messages
 function handleServerMessage(msg) {
   switch (msg.type) {
     case 'CONNECTED':
@@ -350,32 +380,47 @@ function handleServerMessage(msg) {
       break;
 
     case 'GAME_STARTED':
-      gameRoomCode.textContent = msg.roomCode;
-      myScore = 0;
-      updateScoreUI(0);
+      // Determine my team from players list
+      if (msg.players) {
+        const me = msg.players.find(p => p.id === myPlayerId);
+        if (me && me.team) {
+          myTeam = me.team;
+        } else {
+          myTeam = 'BLUE';
+        }
+      }
+      opponentTeam = myTeam === 'BLUE' ? 'RED' : 'BLUE';
+
+      teamScores = msg.teamScores || { blue: 0, red: 0 };
+      updateScoreboardUI();
+
+      myTeamBadge.textContent = `내 팀: ${myTeam}`;
+      myTeamBadge.style.color = myTeam === 'BLUE' ? '#80d8ff' : '#ffab91';
+      myTeamBadge.style.borderColor = myTeam === 'BLUE' ? '#0091ea' : '#ff5722';
+
+      lockBottomText.textContent = `TARGET LOCKED (${opponentTeam} TEAM)`;
+
       triggerHaptic([50, 50, 80]);
       switchView('game');
-      showToast('🚀 배틀 시작! 카메라로 상대를 조준하고 쏘세요!');
+      startMatchTimer(msg.duration || 150);
+      showToast(`🚀 배틀 시작! [${myTeam}] 팀으로 참전합니다!`);
       break;
 
     case 'GET_HIT':
-      // The local player was hit by an opponent!
       triggerHaptic([80, 40, 120]);
       playSplatSound();
-      triggerInkSplatter(msg.splatColor || '#ff007f');
-      showToast(`💥 ${msg.shooterNickname || '상대'} 님의 페인트에 피격당했습니다!`);
+      triggerInkSplatter(msg.splatColor || (myTeam === 'BLUE' ? '#ff5722' : '#00e5ff'));
+      showToast(`💥 [${msg.shooterTeam || '상대'}] ${msg.shooterNickname || '상대'} 님의 페인트에 피격당했습니다!`);
       break;
 
     case 'SCORE_UPDATE':
-      if (msg.shooterId === myPlayerId) {
-        myScore += 100;
-        updateScoreUI(myScore);
-        playHitSound();
-        spawnFloatingText('+100', '#ffd000');
+      if (msg.teamScores) {
+        teamScores = msg.teamScores;
+        updateScoreboardUI();
       }
-      if (msg.scores && msg.scores.length > 0) {
-        const top = msg.scores[0];
-        leaderboardPreview.textContent = `🏆 1위: ${top.nickname} (${top.score}점)`;
+      if (msg.shooterId === myPlayerId) {
+        playHitSound();
+        spawnHitBurst('+100');
       }
       if (msg.hitMessage) {
         showHitFeed(msg.hitMessage);
@@ -392,8 +437,38 @@ function handleServerMessage(msg) {
   }
 }
 
-function updateScoreUI(score) {
-  myScoreBadge.innerHTML = `내 점수: <b>${score}</b>점`;
+function updateScoreboardUI() {
+  scoreBlueEl.textContent = teamScores.blue || 0;
+  scoreRedEl.textContent = teamScores.red || 0;
+}
+
+function startMatchTimer(durationSeconds) {
+  stopMatchTimer();
+  matchRemainingSeconds = durationSeconds;
+  updateTimerDisplay();
+
+  matchTimerInterval = setInterval(() => {
+    matchRemainingSeconds--;
+    if (matchRemainingSeconds <= 0) {
+      matchRemainingSeconds = 0;
+      stopMatchTimer();
+      showToast('⏰ 매치 종료! 최종 결과를 집계합니다.');
+    }
+    updateTimerDisplay();
+  }, 1000);
+}
+
+function stopMatchTimer() {
+  if (matchTimerInterval) {
+    clearInterval(matchTimerInterval);
+    matchTimerInterval = null;
+  }
+}
+
+function updateTimerDisplay() {
+  const m = Math.floor(matchRemainingSeconds / 60);
+  const s = matchRemainingSeconds % 60;
+  matchTimerEl.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 let feedTimeout = null;
@@ -583,7 +658,6 @@ async function initVisionDetector() {
     aiStatusPill.textContent = 'AI 준비 완료 ✅';
     aiStatusPill.style.color = '#00e676';
   } catch (err) {
-    console.warn('[Vision] GPU delegate failed, falling back to CPU:', err);
     try {
       const vision = await FilesetResolver.forVisionTasks(
         'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
@@ -602,7 +676,6 @@ async function initVisionDetector() {
       aiStatusPill.textContent = 'AI 준비 완료 (CPU) ✅';
       aiStatusPill.style.color = '#00e676';
     } catch (fallbackErr) {
-      console.error('[Vision] Failed to load MediaPipe detector:', fallbackErr);
       isDetectorLoading = false;
       aiStatusPill.textContent = 'AI 오프라인';
       aiStatusPill.style.color = '#ff5252';
@@ -610,7 +683,6 @@ async function initVisionDetector() {
   }
 }
 
-// Start Camera Stream
 async function startCamera() {
   if (isCameraActive) return;
 
@@ -631,7 +703,6 @@ async function startCamera() {
     try {
       stream = await navigator.mediaDevices.getUserMedia(constraints);
     } catch (idealErr) {
-      // Fallback without facingMode constraint (e.g. desktop webcam)
       stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     }
 
@@ -643,10 +714,8 @@ async function startCamera() {
     cameraPromptOverlay.classList.add('hidden');
     showToast('📷 배틀 카메라 활성화 완료!');
 
-    // Initialize detector in background
     initVisionDetector();
   } catch (err) {
-    console.error('[Camera] Access error:', err);
     cameraPromptOverlay.classList.remove('hidden');
     cameraPromptOverlay.querySelector('.prompt-desc').textContent =
       '카메라 접근 권한이 필요합니다. 브라우저 주소창 왼쪽의 권한 설정에서 카메라를 허용해 주세요.';
@@ -662,7 +731,7 @@ function stopCamera() {
 }
 
 btnStartCamera.addEventListener('click', () => {
-  getAudioContext(); // initialize audio on user touch
+  getAudioContext();
   startCamera();
 });
 
@@ -684,7 +753,6 @@ setInterval(() => {
     const detections = objectDetector.detectForVideo(cameraVideo, now).detections;
     const people = [];
 
-    const vw = cameraVideo.videoWidth || 640;
     const vh = cameraVideo.videoHeight || 480;
 
     for (const det of detections) {
@@ -706,10 +774,7 @@ setInterval(() => {
     }
 
     detectedPeople = people;
-    lastInferenceTime = now;
-  } catch (err) {
-    // skip single frame inference error
-  }
+  } catch (err) {}
 }, 90);
 
 // ==========================================
@@ -718,12 +783,15 @@ setInterval(() => {
 
 let canvasCtx = null;
 let flyingProjectiles = [];
-let floatingTexts = [];
+let hitBursts = []; // Cartoon Blue Splats with "HIT! +100"
 
 function enterBattleArena() {
   canvasCtx = gameCanvas.getContext('2d');
   resizeArenaCanvas();
   window.addEventListener('resize', resizeArenaCanvas);
+
+  currentAmmo = MAX_AMMO;
+  updateAmmoBar();
 
   startCamera();
   requestAnimationFrame(renderArenaLoop);
@@ -741,18 +809,19 @@ function resizeArenaCanvas() {
   }
 }
 
-function spawnFloatingText(text, color = '#ffd000') {
+function spawnHitBurst(text = 'HIT! +100') {
   const container = arenaContainer;
   const cw = container ? container.clientWidth : 360;
   const ch = container ? container.clientHeight : 480;
 
-  floatingTexts.push({
+  hitBursts.push({
     text,
-    color,
-    x: cw / 2,
-    y: ch / 2 - 20,
+    x: cw / 2 + 50,
+    y: ch / 2 + 10,
+    size: 42,
     alpha: 1.0,
-    vy: -2.2
+    vy: -1.8,
+    scale: 0.6
   });
 }
 
@@ -763,12 +832,16 @@ function renderArenaLoop() {
   const cw = container ? container.clientWidth : 360;
   const ch = container ? container.clientHeight : 480;
 
-  // 1. Render Video Feed or Sci-Fi Scanner Background
+  // Ammo Passive Regeneration (+0.35 per frame => ~21 per sec)
+  if (currentAmmo < MAX_AMMO) {
+    currentAmmo = Math.min(MAX_AMMO, currentAmmo + 0.35);
+    updateAmmoBar();
+  }
+
+  // 1. Render Video Feed or Sci-Fi Dark Background
   if (isCameraActive && cameraVideo.readyState >= 2) {
     const vw = cameraVideo.videoWidth;
     const vh = cameraVideo.videoHeight;
-
-    // Cover scale algorithm
     const scale = Math.max(cw / vw, ch / vh);
     const sw = vw * scale;
     const sh = vh * scale;
@@ -776,7 +849,6 @@ function renderArenaLoop() {
     const sy = (ch - sh) / 2;
 
     canvasCtx.save();
-    // Mirror horizontally if user front camera
     if (facingMode === 'user') {
       canvasCtx.translate(cw, 0);
       canvasCtx.scale(-1, 1);
@@ -787,15 +859,14 @@ function renderArenaLoop() {
       canvasCtx.restore();
     }
 
-    // Semi-transparent vignette overlay for focus
-    const grad = canvasCtx.createRadialGradient(cw / 2, ch / 2, cw * 0.25, cw / 2, ch / 2, cw * 0.7);
+    // Subtle dark vignette
+    const grad = canvasCtx.createRadialGradient(cw / 2, ch / 2, cw * 0.28, cw / 2, ch / 2, cw * 0.72);
     grad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    grad.addColorStop(1, 'rgba(0, 0, 0, 0.45)');
+    grad.addColorStop(1, 'rgba(0, 0, 0, 0.42)');
     canvasCtx.fillStyle = grad;
     canvasCtx.fillRect(0, 0, cw, ch);
   } else {
-    // Standby Grid Background
-    canvasCtx.fillStyle = '#0f0822';
+    canvasCtx.fillStyle = '#0a0518';
     canvasCtx.fillRect(0, 0, cw, ch);
 
     canvasCtx.strokeStyle = 'rgba(0, 229, 255, 0.08)';
@@ -817,10 +888,11 @@ function renderArenaLoop() {
   // 2. Check Center Crosshair Lock-on with Debounce Buffer
   const centerX = cw / 2;
   const centerY = ch / 2;
-  const reticleRadius = 34;
+  const reticleRadius = 38;
 
   let currentlyOverlapping = false;
   let targetDist = null;
+  let lockedBox = null;
 
   if (isCameraActive && cameraVideo.readyState >= 2 && detectedPeople.length > 0) {
     const vw = cameraVideo.videoWidth;
@@ -830,7 +902,6 @@ function renderArenaLoop() {
     const sy = (ch - vh * scale) / 2;
 
     for (const person of detectedPeople) {
-      // Map video coordinate to canvas coordinate
       let px = sx + person.x * scale;
       const py = sy + person.y * scale;
       const pw = person.w * scale;
@@ -840,15 +911,13 @@ function renderArenaLoop() {
         px = cw - (px + pw);
       }
 
-      // Draw subtle neon corner brackets around detected person
-      drawTargetCorners(canvasCtx, px, py, pw, ph, isLockedOn ? '#ff0055' : '#00e5ff');
+      // Draw Orange Corner Bracket Box (matching screenshot!)
+      drawOrangeTargetBox(canvasCtx, px, py, pw, ph);
 
-      // Distance tag
-      canvasCtx.fillStyle = isLockedOn ? '#ff0055' : '#00e5ff';
-      canvasCtx.font = 'bold 12px Fredoka, sans-serif';
-      canvasCtx.fillText(`상대 ~${person.dist}m`, px, Math.max(22, py - 6));
+      // Draw High-Tech Cyan Wireframe Skeleton Pose lines (matching screenshot!)
+      drawWireframeSkeleton(canvasCtx, px, py, pw, ph);
 
-      // Overlap with Center Reticle
+      // Check overlap with center reticle
       if (
         centerX >= px &&
         centerX <= px + pw &&
@@ -857,46 +926,47 @@ function renderArenaLoop() {
       ) {
         currentlyOverlapping = true;
         targetDist = person.dist;
+        lockedBox = { px, py, pw, ph };
       }
     }
   }
 
-  // Debounce memory (0.25s) so lock-on doesn't flicker when phone moves
+  // Debounce memory (0.28s)
   const now = performance.now();
   if (currentlyOverlapping) {
     lastLockTime = now;
     isLockedOn = true;
     lockedDistance = targetDist;
-  } else if (now - lastLockTime < 260) {
+  } else if (now - lastLockTime < 280) {
     isLockedOn = true;
   } else {
     isLockedOn = false;
     lockedDistance = null;
   }
 
-  // Update Lock Indicator UI
+  // Update Lock Indicator Banners
   if (isLockedOn) {
-    lockBadge.classList.remove('hidden');
-    lockText.textContent = `🎯 상대 포착! (~${lockedDistance || '3.0'}m) PANG!`;
-    btnFire.classList.add('locked-on');
+    lockBadgeTop.classList.remove('hidden');
+    lockBadgeBottom.classList.remove('hidden');
+    lockBottomText.textContent = `TARGET LOCKED (${opponentTeam} TEAM)`;
   } else {
-    lockBadge.classList.add('hidden');
-    btnFire.classList.remove('locked-on');
+    lockBadgeTop.classList.add('hidden');
+    lockBadgeBottom.classList.add('hidden');
   }
 
-  // 3. Draw Paintball Reticle
-  drawPaintballReticle(canvasCtx, centerX, centerY, reticleRadius, isLockedOn, now);
+  // 3. Draw Splatfight Cyan Center Reticle (matching screenshot!)
+  drawSplatfightCrosshair(canvasCtx, centerX, centerY, reticleRadius, isLockedOn, now);
 
-  // 4. Render Flying Paint Projectiles
+  // 4. Render Flying Projectiles
   for (let i = flyingProjectiles.length - 1; i >= 0; i--) {
     const proj = flyingProjectiles[i];
     proj.x += proj.vx;
     proj.y += proj.vy;
-    proj.radius *= 0.95;
+    proj.radius *= 0.94;
     proj.life--;
 
     canvasCtx.beginPath();
-    canvasCtx.arc(proj.x, proj.y, Math.max(3, proj.radius), 0, Math.PI * 2);
+    canvasCtx.arc(proj.x, proj.y, Math.max(4, proj.radius), 0, Math.PI * 2);
     canvasCtx.fillStyle = proj.color;
     canvasCtx.shadowColor = proj.color;
     canvasCtx.shadowBlur = 12;
@@ -904,90 +974,36 @@ function renderArenaLoop() {
     canvasCtx.shadowBlur = 0;
 
     if (proj.life <= 0) {
-      // Paint splash at target center
-      drawSplatterBurst(canvasCtx, proj.x, proj.y, proj.color);
       flyingProjectiles.splice(i, 1);
     }
   }
 
-  // 5. Render Floating Scores (+100)
-  for (let i = floatingTexts.length - 1; i >= 0; i--) {
-    const ft = floatingTexts[i];
-    ft.y += ft.vy;
-    ft.alpha -= 0.024;
+  // 5. Render Cartoon Splat Bursts + "HIT! +100" (matching screenshot!)
+  for (let i = hitBursts.length - 1; i >= 0; i--) {
+    const hb = hitBursts[i];
+    hb.y += hb.vy;
+    hb.scale = Math.min(1.0, hb.scale + 0.08);
+    hb.alpha -= 0.022;
 
-    canvasCtx.font = '900 24px Fredoka, Outfit, sans-serif';
-    canvasCtx.fillStyle = `rgba(255, 208, 0, ${Math.max(0, ft.alpha)})`;
-    canvasCtx.textAlign = 'center';
-    canvasCtx.fillText(ft.text, ft.x, ft.y);
+    drawCartoonHitSplat(canvasCtx, hb.x, hb.y, hb.size * hb.scale, hb.text, hb.alpha);
 
-    if (ft.alpha <= 0) {
-      floatingTexts.splice(i, 1);
+    if (hb.alpha <= 0) {
+      hitBursts.splice(i, 1);
     }
   }
 
   requestAnimationFrame(renderArenaLoop);
 }
 
-// Reticle Graphics
-function drawPaintballReticle(ctx, cx, cy, r, locked, now) {
+// Draw Orange Corner Bracket Box around opponent (matching screenshot)
+function drawOrangeTargetBox(ctx, x, y, w, h) {
   ctx.save();
-  const pulse = locked ? Math.sin(now * 0.015) * 4 : 0;
-  const currentR = r + pulse;
+  ctx.strokeStyle = '#ff6600';
+  ctx.lineWidth = 3.5;
+  ctx.shadowColor = '#ff6600';
+  ctx.shadowBlur = 10;
 
-  // Outer Circle
-  ctx.beginPath();
-  ctx.arc(cx, cy, currentR, 0, Math.PI * 2);
-  ctx.lineWidth = locked ? 3.5 : 2;
-  ctx.strokeStyle = locked ? '#ff0055' : 'rgba(255, 255, 255, 0.75)';
-  if (locked) {
-    ctx.fillStyle = 'rgba(255, 0, 85, 0.22)';
-    ctx.fill();
-  }
-  ctx.stroke();
-
-  // 4 Crosshair Notches
-  const notchLen = 10;
-  ctx.lineWidth = 3;
-  ctx.strokeStyle = locked ? '#ff0055' : '#00e5ff';
-
-  // Top
-  ctx.beginPath();
-  ctx.moveTo(cx, cy - currentR - 3);
-  ctx.lineTo(cx, cy - currentR - 3 - notchLen);
-  ctx.stroke();
-
-  // Bottom
-  ctx.beginPath();
-  ctx.moveTo(cx, cy + currentR + 3);
-  ctx.lineTo(cx, cy + currentR + 3 + notchLen);
-  ctx.stroke();
-
-  // Left
-  ctx.beginPath();
-  ctx.moveTo(cx - currentR - 3, cy);
-  ctx.lineTo(cx - currentR - 3 - notchLen, cy);
-  ctx.stroke();
-
-  // Right
-  ctx.beginPath();
-  ctx.moveTo(cx + currentR + 3, cy);
-  ctx.lineTo(cx + currentR + 3 + notchLen, cy);
-  ctx.stroke();
-
-  // Center Dot
-  ctx.beginPath();
-  ctx.arc(cx, cy, locked ? 5 : 3, 0, Math.PI * 2);
-  ctx.fillStyle = locked ? '#ff0055' : '#00e5ff';
-  ctx.fill();
-
-  ctx.restore();
-}
-
-function drawTargetCorners(ctx, x, y, w, h, color) {
-  const len = Math.min(22, w * 0.25, h * 0.25);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.5;
+  const len = Math.min(26, w * 0.28, h * 0.28);
 
   // Top-Left
   ctx.beginPath();
@@ -1016,34 +1032,168 @@ function drawTargetCorners(ctx, x, y, w, h, color) {
   ctx.lineTo(x + w, y + h);
   ctx.lineTo(x + w, y + h - len);
   ctx.stroke();
+
+  ctx.restore();
 }
 
-function drawSplatterBurst(ctx, x, y, color) {
+// Draw High-Tech Cyan Wireframe Skeleton Pose lines (matching screenshot)
+function drawWireframeSkeleton(ctx, x, y, w, h) {
   ctx.save();
-  for (let i = 0; i < 6; i++) {
-    const angle = (Math.PI * 2 / 6) * i + Math.random() * 0.4;
-    const dist = 12 + Math.random() * 16;
-    const bx = x + Math.cos(angle) * dist;
-    const by = y + Math.sin(angle) * dist;
+  ctx.strokeStyle = 'rgba(0, 229, 255, 0.45)';
+  ctx.lineWidth = 1.5;
 
-    ctx.beginPath();
-    ctx.arc(bx, by, 3 + Math.random() * 3, 0, Math.PI * 2);
-    ctx.fillStyle = color;
-    ctx.fill();
+  const headX = x + w / 2;
+  const headY = y + h * 0.18;
+  const headR = Math.min(16, w * 0.16);
+
+  // Head circle
+  ctx.beginPath();
+  ctx.arc(headX, headY, headR, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Spine & Shoulders
+  const neckY = headY + headR;
+  const shoulderY = y + h * 0.32;
+  const waistY = y + h * 0.58;
+
+  ctx.beginPath();
+  ctx.moveTo(headX, neckY);
+  ctx.lineTo(headX, waistY);
+  // Shoulders
+  ctx.moveTo(x + w * 0.25, shoulderY);
+  ctx.lineTo(x + w * 0.75, shoulderY);
+  // Hips
+  ctx.moveTo(x + w * 0.32, waistY);
+  ctx.lineTo(x + w * 0.68, waistY);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+// Draw Splatfight Cyan Center Crosshair Reticle (matching screenshot)
+function drawSplatfightCrosshair(ctx, cx, cy, r, locked, now) {
+  ctx.save();
+  const pulse = locked ? Math.sin(now * 0.016) * 3 : 0;
+  const currentR = r + pulse;
+
+  // Outer Cyan Circle
+  ctx.beginPath();
+  ctx.arc(cx, cy, currentR, 0, Math.PI * 2);
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = locked ? '#ff1744' : '#00e5ff';
+  ctx.shadowColor = locked ? '#ff1744' : '#00e5ff';
+  ctx.shadowBlur = 12;
+  ctx.stroke();
+
+  // 4 Crosshair Tick Lines
+  const tickLen = 14;
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = '#00e5ff';
+
+  // Top
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - currentR + 4);
+  ctx.lineTo(cx, cy - currentR - tickLen);
+  ctx.stroke();
+
+  // Bottom
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + currentR - 4);
+  ctx.lineTo(cx, cy + currentR + tickLen);
+  ctx.stroke();
+
+  // Left
+  ctx.beginPath();
+  ctx.moveTo(cx - currentR + 4, cy);
+  ctx.lineTo(cx - currentR - tickLen, cy);
+  ctx.stroke();
+
+  // Right
+  ctx.beginPath();
+  ctx.moveTo(cx + currentR - 4, cy);
+  ctx.lineTo(cx + currentR + tickLen, cy);
+  ctx.stroke();
+
+  // Center Target Dot
+  ctx.beginPath();
+  ctx.arc(cx, cy, 4, 0, Math.PI * 2);
+  ctx.fillStyle = locked ? '#ff1744' : '#00e5ff';
+  ctx.fill();
+
+  ctx.restore();
+}
+
+// Draw Cartoon Splat Burst with HIT! +100 (matching screenshot)
+function drawCartoonHitSplat(ctx, x, y, size, text, alpha) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, alpha);
+
+  // Cartoon Blue Paint Splat Shape
+  ctx.fillStyle = '#00a0ff';
+  ctx.strokeStyle = '#0044aa';
+  ctx.lineWidth = 2.5;
+
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const angle = (Math.PI * 2 / 8) * i;
+    const r = (i % 2 === 0 ? size : size * 0.65);
+    const px = x + Math.cos(angle) * r;
+    const py = y + Math.sin(angle) * r;
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
   }
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // "HIT!" in bold white text
+  ctx.font = '900 16px Fredoka, Outfit, sans-serif';
+  ctx.fillStyle = '#ffffff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.shadowColor = '#000000';
+  ctx.shadowBlur = 4;
+  ctx.fillText('HIT!', x, y - 6);
+
+  // "+100" in bright yellow text
+  ctx.font = '900 18px Fredoka, Outfit, sans-serif';
+  ctx.fillStyle = '#ffd000';
+  ctx.fillText('+100', x, y + 10);
+
   ctx.restore();
 }
 
 // ==========================================
-// SHOOTING & INK HIT MECHANICS
+// SHOOTING & AMMO MECHANICS
 // ==========================================
 
+function updateAmmoBar() {
+  const pct = Math.max(0, Math.min(100, currentAmmo));
+  ammoFillEl.style.width = `${pct}%`;
+  if (pct < AMMO_PER_SHOT) {
+    ammoFillEl.style.background = '#ff3344';
+  } else {
+    ammoFillEl.style.background = 'linear-gradient(90deg, #ff9100 0%, #ffd000 100%)';
+  }
+}
+
 let lastShootTime = 0;
-const SHOOT_COOLDOWN = 380; // ms
+const SHOOT_INTERVAL = 320; // ms
 
 function performShoot() {
   const now = performance.now();
-  if (now - lastShootTime < SHOOT_COOLDOWN) return;
+  if (now - lastShootTime < SHOOT_INTERVAL) return;
+
+  // Check Ammo
+  if (currentAmmo < AMMO_PER_SHOT) {
+    playEmptyAmmoSound();
+    triggerHaptic(15);
+    showToast('⚠️ PAINT AMMO 부족! 충전 중입니다.');
+    return;
+  }
+
+  currentAmmo -= AMMO_PER_SHOT;
+  updateAmmoBar();
   lastShootTime = now;
 
   triggerHaptic(30);
@@ -1053,7 +1203,7 @@ function performShoot() {
   const cw = container ? container.clientWidth : 360;
   const ch = container ? container.clientHeight : 480;
 
-  // Projectile starts from fire button position and flies to center reticle
+  // Flying paint droplet animation from bottom right to center
   const fireRect = btnFire.getBoundingClientRect();
   const contRect = container.getBoundingClientRect();
   const startX = fireRect.left - contRect.left + fireRect.width / 2;
@@ -1062,21 +1212,23 @@ function performShoot() {
   const targetX = cw / 2;
   const targetY = ch / 2;
 
-  const frames = 9;
+  const frames = 8;
+  const bulletColor = myTeam === 'BLUE' ? '#00e5ff' : '#ff5722';
+
   flyingProjectiles.push({
     x: startX,
     y: startY,
     vx: (targetX - startX) / frames,
     vy: (targetY - startY) / frames,
-    radius: 14,
-    color: myColor,
+    radius: 16,
+    color: bulletColor,
     life: frames
   });
 
-  // If locked-on, report HIT to server!
+  // If target locked, report hit to server!
   if (isLockedOn) {
     send('PLAYER_HIT', {
-      color: myColor
+      color: bulletColor
     });
   }
 }
@@ -1086,7 +1238,7 @@ btnFire.addEventListener('pointerdown', (e) => {
   performShoot();
 });
 
-// Spacebar or Click-to-shoot on canvas
+// Spacebar shoot support
 window.addEventListener('keydown', (e) => {
   if (viewGame.classList.contains('active') && e.code === 'Space') {
     e.preventDefault();
@@ -1095,14 +1247,14 @@ window.addEventListener('keydown', (e) => {
 });
 
 // Stress-Relief Ink Splatter Hit Effect
-function triggerInkSplatter(color = '#ff007f') {
+function triggerInkSplatter(color = '#ff5722') {
   triggerHaptic([60, 40, 90]);
 
   const splatCount = 2 + Math.floor(Math.random() * 2);
   for (let i = 0; i < splatCount; i++) {
     const x = 20 + Math.random() * 60;
     const y = 20 + Math.random() * 60;
-    const size = 110 + Math.random() * 110;
+    const size = 120 + Math.random() * 110;
 
     const splat = document.createElement('div');
     splat.className = 'ink-splat';
@@ -1117,7 +1269,7 @@ function triggerInkSplatter(color = '#ff007f') {
     const r4 = 30 + Math.random() * 40;
     splat.style.borderRadius = `${r1}% ${100 - r1}% ${r2}% ${100 - r2}% / ${r3}% ${r4}% ${100 - r4}% ${100 - r3}%`;
 
-    splat.style.background = `radial-gradient(circle, ${color} 20%, #79008a 75%, rgba(25, 0, 45, 0.95) 100%)`;
+    splat.style.background = `radial-gradient(circle, ${color} 25%, #79008a 75%, rgba(20, 0, 40, 0.95) 100%)`;
 
     inkOverlay.appendChild(splat);
     inkShakeGuide.classList.remove('hidden');
@@ -1131,7 +1283,7 @@ function triggerInkSplatter(color = '#ff007f') {
   }
 }
 
-// Clear ink by tapping on screen
+// Tap ink to wipe
 inkOverlay.addEventListener('pointerdown', () => {
   if (inkOverlay.children.length > 0) {
     const first = inkOverlay.firstElementChild;
@@ -1151,7 +1303,7 @@ inkOverlay.addEventListener('pointerdown', () => {
 });
 
 btnTestSplatter.addEventListener('click', () => {
-  triggerInkSplatter(PAINT_COLORS[Math.floor(Math.random() * PAINT_COLORS.length)]);
+  triggerInkSplatter(myTeam === 'BLUE' ? '#ff5722' : '#00e5ff');
 });
 
 // Physical Shake Detection (DeviceMotionEvent)

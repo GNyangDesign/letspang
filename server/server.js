@@ -42,7 +42,8 @@ function serializePlayers(room) {
       id: player.id,
       nickname: player.nickname,
       isHost: player.id === room.hostId,
-      score: player.score || 0
+      score: player.score || 0,
+      team: player.team || 'BLUE'
     });
   }
   return list;
@@ -236,9 +237,14 @@ wss.on('connection', (ws, req) => {
         }
 
         room.status = 'PLAYING';
-        // Reset scores when game starts
+        room.teamScores = { blue: 0, red: 0 };
+
+        // Assign teams (alternating Blue and Red) and reset scores
+        let idx = 0;
         for (const p of room.players.values()) {
           p.score = 0;
+          p.team = idx % 2 === 0 ? 'BLUE' : 'RED';
+          idx++;
         }
 
         console.log(`[Server] Game started in room: ${currentRoomCode}`);
@@ -248,6 +254,8 @@ wss.on('connection', (ws, req) => {
           roomCode: currentRoomCode,
           players: serializePlayers(room),
           scores: serializeScores(room),
+          teamScores: room.teamScores,
+          duration: 150, // 2:30 in seconds
           startTime: Date.now()
         });
         break;
@@ -260,6 +268,9 @@ wss.on('connection', (ws, req) => {
         if (!shooter) return;
 
         shooter.score = (shooter.score || 0) + 100;
+        if (!room.teamScores) room.teamScores = { blue: 0, red: 0 };
+        const teamKey = (shooter.team || 'BLUE').toLowerCase();
+        room.teamScores[teamKey] = (room.teamScores[teamKey] || 0) + 100;
 
         let victim = null;
         if (msg.targetId && room.players.has(msg.targetId) && msg.targetId !== playerId) {
@@ -278,7 +289,8 @@ wss.on('connection', (ws, req) => {
             type: 'GET_HIT',
             shooterId: playerId,
             shooterNickname: shooter.nickname,
-            splatColor: msg.color || '#ff007f'
+            shooterTeam: shooter.team || 'BLUE',
+            splatColor: msg.color || '#ff5722'
           });
         }
 
@@ -286,9 +298,11 @@ wss.on('connection', (ws, req) => {
           type: 'SCORE_UPDATE',
           shooterId: playerId,
           shooterNickname: shooter.nickname,
+          shooterTeam: shooter.team || 'BLUE',
           victimNickname: victim ? victim.nickname : '상대',
           scores: serializeScores(room),
-          hitMessage: `🎯 ${shooter.nickname} 님이 ${victim ? victim.nickname : '상대'} 님에게 명중! (+100)`
+          teamScores: room.teamScores,
+          hitMessage: `🎯 [${shooter.team}] ${shooter.nickname} 님이 명중! (+100)`
         });
         break;
       }
